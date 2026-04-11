@@ -95,7 +95,6 @@ REGION_TO_CITY = {
     "Липецкая область": ("Липецк", 508_000, "Europe/Moscow"),
     "Тамбовская область": ("Тамбов", 293_000, "Europe/Moscow"),
     "Калининградская область": ("Калининград", 493_000, "Europe/Kaliningrad"),
-    "Республика Калмыкия": ("Элиста", 103_000, "Europe/Moscow"),
     "Россия": ("Москва", 13_010_000, "Europe/Moscow"),
 }
 
@@ -111,18 +110,30 @@ def fetch_page(code: int) -> str | None:
         return None
 
 
+def append_result(results: list[dict], prefix: str, operator: str, region: str, city: str, population: int, timezone: str):
+    results.append({
+        "prefix": prefix,
+        "operator": operator,
+        "region": region,
+        "city": city,
+        "population": population,
+        "timezone": timezone,
+    })
+
+
 def parse_rows(html: str, def_code: str) -> list[dict]:
     """
     Парсит таблицу с kody.su и возвращает список записей вида:
-    {prefix: "9001234", operator: "Теле2", region: "Краснодарский край", city: "Краснодар", ...}
+    {prefix: "906564", operator: "Теле2", region: "Санкт-Петербург", city: "Санкт-Петербург", ...}
     """
     results = []
-    # Ищем строки таблицы
     rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL)
+
     for row in rows:
         cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
         if len(cells) < 3:
             continue
+
         nums_raw = re.sub(r'<[^>]+>', '', cells[0]).strip()
         operator = re.sub(r'<[^>]+>', '', cells[1]).strip()
         region = re.sub(r'<[^>]+>', '', cells[2]).strip()
@@ -134,27 +145,45 @@ def parse_rows(html: str, def_code: str) -> list[dict]:
 
         city, population, timezone = REGION_TO_CITY[region]
 
-        # Парсим номера: "900-000xxxx 001xxxx ..."
-        # Убираем "DEF-" префикс
         nums_clean = re.sub(rf'^{def_code}-', '', nums_raw)
-        # Каждый токен - отдельный диапазон
+        nums_clean = nums_clean.replace(',', ' ')
         tokens = nums_clean.split()
+
         for token in tokens:
-            # Пропускаем "..." и числа типа "0135049"
-            if token == '...' or re.match(r'^\d{7}$', token):
+            token = token.strip()
+            if not token or token == '...':
                 continue
-            # Убираем x и всё после первого x
-            m = re.match(r'^(\d+)x', token)
+
+            if re.fullmatch(r'\d{7}-\d{7}', token):
+                start, end = token.split('-')
+                common = []
+                for a, b in zip(start, end):
+                    if a == b:
+                        common.append(a)
+                    else:
+                        break
+                if common:
+                    prefix = def_code + ''.join(common)
+                    append_result(results, prefix, operator, region, city, population, timezone)
+                continue
+
+            m = re.fullmatch(r'(\d+)x+', token)
             if m:
                 prefix = def_code + m.group(1)
-                results.append({
-                    "prefix": prefix,
-                    "operator": operator,
-                    "region": region,
-                    "city": city,
-                    "population": population,
-                    "timezone": timezone,
-                })
+                append_result(results, prefix, operator, region, city, population, timezone)
+                continue
+
+            if re.fullmatch(r'\d{7}', token):
+                prefix = def_code + token
+                append_result(results, prefix, operator, region, city, population, timezone)
+                continue
+
+            m = re.match(r'^(\d+)[xX*]+$', token)
+            if m:
+                prefix = def_code + m.group(1)
+                append_result(results, prefix, operator, region, city, population, timezone)
+                continue
+
     return results
 
 
@@ -167,18 +196,34 @@ def build_db():
             continue
         if "404" in html[:500] or "не найден" in html[:500].lower():
             continue
+
         entries = parse_rows(html, str(code))
         print(f"  → {len(entries)} записей")
         all_entries.extend(entries)
-        time.sleep(0.5)  # вежливая пауза
+        time.sleep(0.5)
 
-    # Сортируем по убыванию длины префикса - для правильного поиска
-    all_entries.sort(key=lambda x: len(x["prefix"]), reverse=True)
+    seen = set()
+    unique_entries = []
+    for entry in all_entries:
+        key = (
+            entry["prefix"],
+            entry["operator"],
+            entry["region"],
+            entry["city"],
+            entry["population"],
+            entry["timezone"],
+        )
+        if key not in seen:
+            seen.add(key)
+            unique_entries.append(entry)
 
-    with open("codes_db.json", "w", encoding="utf-8") as f:
-        json.dump(all_entries, f, ensure_ascii=False, indent=2)
+    unique_entries.sort(key=lambda x: len(x["prefix"]), reverse=True)
 
-    print(f"\nГотово! Сохранено {len(all_entries)} записей в codes_db.json")
+    output_path = Path(__file__).parent / "codes_db.json"
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(unique_entries, f, ensure_ascii=False, indent=2)
+
+    print(f"\nГотово! Сохранено {len(unique_entries)} записей в {output_path.name}")
 
 
 if __name__ == "__main__":
