@@ -1,7 +1,7 @@
 """
 Telegram-бот: определение города/региона по мобильному номеру РФ
 + локальное время
-+ ссылки для открытия в Telegram и MAX
++ ссылка для открытия в Telegram
 + логирование использований в Google Sheets через Apps Script webhook
 
 Переменные окружения:
@@ -86,10 +86,8 @@ def get_local_time(tz_name: str) -> str:
         return "н/д"
 
 
-def build_messenger_links(phone_e164: str) -> tuple[str, str]:
-    telegram_link = f"http://t.me/{phone_e164}"
-    max_link = f"https://max.ru/{phone_e164}"
-    return telegram_link, max_link
+def build_telegram_link(phone_e164: str) -> str:
+    return f"http://t.me/{phone_e164}"
 
 
 def log_to_google_sheets(update: Update, phone_e164: str, entry):
@@ -125,7 +123,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         await update.message.reply_text(
             f"Привет! База содержит {count:,} записей по диапазонам номеров РФ.\n\n"
-            "Отправь мобильный номер, скажу город, оператора, местное время и дам ссылки для Telegram/MAX.\n\n"
+            "Отправь мобильный номер, скажу город, оператора, местное время и дам ссылку для Telegram.\n\n"
             "Поддерживаемые форматы:\n"
             "+79118339000\n"
             "89118339000\n"
@@ -163,7 +161,7 @@ async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     phone_e164 = format_russian_phone(digits)
-    telegram_link, max_link = build_messenger_links(phone_e164)
+    telegram_link = build_telegram_link(phone_e164)
     entry = lookup(digits)
 
     log_to_google_sheets(update, phone_e164, entry)
@@ -173,7 +171,6 @@ async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📞 Номер: `{phone_e164}`",
             "",
             f"💬 [Открыть в Telegram]({telegram_link})",
-            f"💬 [Открыть в MAX]({max_link})",
             "",
             "Номер не найден в базе регионов.",
         ]
@@ -193,7 +190,6 @@ async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🕐 Местное время: *{get_local_time(entry['timezone'])}*",
         "",
         f"💬 [Открыть в Telegram]({telegram_link})",
-        f"💬 [Открыть в MAX]({max_link})",
         "",
         "⚠️ _Регион выдачи номера при подключении, не текущее местонахождение._",
     ]
