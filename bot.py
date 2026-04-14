@@ -1,7 +1,12 @@
 """
 Telegram-бот: определение города/региона по мобильному номеру РФ
 + локальное время
-+ ссылки для открытия в Telegram и MAX.
++ ссылки для открытия в Telegram и MAX
++ логирование использований в Google Sheets через Apps Script webhook
+
+Переменные окружения:
+- BOT_TOKEN
+- GOOGLE_SCRIPT_URL   (необязательно, если не задана, логирование отключено)
 
 Использует базу данных codes_db.json, собранную scraper.py.
 """
@@ -13,6 +18,8 @@ import logging
 from datetime import datetime
 import zoneinfo
 from pathlib import Path
+
+import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -57,6 +64,7 @@ def normalize_phone(raw: str):
 
 
 def format_russian_phone(digits10: str) -> str:
+    """Возвращает номер в формате +7XXXXXXXXXX."""
     return f"+7{digits10}"
 
 
@@ -82,6 +90,34 @@ def build_messenger_links(phone_e164: str) -> tuple[str, str]:
     telegram_link = f"http://t.me/{phone_e164}"
     max_link = f"https://max.ru/{phone_e164}"
     return telegram_link, max_link
+
+
+def log_to_google_sheets(update: Update, phone_e164: str, entry):
+    """
+    Отправляет событие использования в Google Sheets через Apps Script webhook.
+    Если GOOGLE_SCRIPT_URL не задан, функция тихо завершается.
+    """
+    url = os.environ.get("GOOGLE_SCRIPT_URL")
+    if not url:
+        return
+
+    try:
+        user = update.effective_user
+        payload = {
+            "timestamp_utc": datetime.utcnow().isoformat(),
+            "user_id": user.id if user else "",
+            "username": user.username if user and user.username else "",
+            "first_name": user.first_name if user and user.first_name else "",
+            "phone": phone_e164,
+            "region": entry["region"] if entry else "",
+            "city": entry["city"] if entry else "",
+            "operator": entry["operator"] if entry else "",
+        }
+
+        response = requests.post(url, json=payload, timeout=5)
+        response.raise_for_status()
+    except Exception as e:
+        logger.warning("Не удалось записать аналитику в Google Sheets: %s", e)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -129,6 +165,8 @@ async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone_e164 = format_russian_phone(digits)
     telegram_link, max_link = build_messenger_links(phone_e164)
     entry = lookup(digits)
+
+    log_to_google_sheets(update, phone_e164, entry)
 
     if not entry:
         lines = [
